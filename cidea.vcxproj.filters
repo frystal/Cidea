@@ -33,6 +33,18 @@
     <ClCompile Include="vm.c">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="compiler.c">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="scanner.c">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="object.c">
+      <Filter>源文件</Filter>
+    </ClCompile>
+    <ClCompile Include="table.c">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="chunk.h">
@@ -51,6 +63,18 @@
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="vm.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="compiler.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="scanner.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="object.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="table.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>
