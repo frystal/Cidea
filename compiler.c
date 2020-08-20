@@ -199,6 +199,7 @@ static int emitJump(uint16_t instruction)
 
 static void emitReturn()
 {
+	emitByte(OP_NIL);
 	emitByte(OP_RETURN);
 }
 
@@ -426,6 +427,27 @@ static void binary(bool canAssign)
 			return;
 		}
 	}
+}
+
+static uint16_t argumentList()
+{
+	uint16_t argCount = 0;
+	if (!check(TOKEN_RIGHT_PAREN))
+	{
+		do
+		{
+			expression();
+			// TODO limte replace with micron
+			if (argCount == 255)
+			{
+				error("Cannot have more than 255 arguments");
+			}
+			argCount++;
+		} while (match(TOKEN_COMMA));
+	}
+
+	consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments");
+	return argCount;
 }
 
 static void call(bool canAssign)
@@ -656,26 +678,7 @@ static void defineVariable(uint16_t global)
 	emitBytes(OP_DEFINE_GLOBAL, global);
 }
 
-static uint16_t argumentList()
-{
-	uint16_t argCount = 0;
-	if (!check(TOKEN_RIGHT_PAREN))
-	{
-		do
-		{
-			expression();
-			// TODO limte replace with micron
-			if (argCount == 255)
-			{
-				error("Cannot have more than 255 arguments");
-			}
-			argCount++;
-		} while (match(TOKEN_COMMA));
-	}
 
-	consume(TOKEN_RIGHT_PAREN, "Expect ')' after arguments");
-	return argCount;
-}
 
 
 static ParseRule* getRule(TokenType type)
@@ -729,7 +732,7 @@ static void function(FunctionType type)
 
 	//create function object
 	ObjFunction* function = endCompiler();
-	emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL)(function));
+	emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
 }
 
 static void funDeclaration()
@@ -847,6 +850,24 @@ static void printStatement()
 	emitByte(OP_PRINT);
 }
 
+static void returnStatement()
+{
+	if (current->type == TYPE_SCRIPT)
+	{
+		error("Cannot return from top-level code");
+	}
+	if (match(TOKEN_SEMICOLON))
+	{
+		emitReturn();
+	}
+	else
+	{
+		expression();
+		consume(TOKEN_SEMICOLON, "Expect ';' after return value.");
+		emitByte(OP_RETURN);
+	}
+}
+
 static void whileStatement()
 {
 	int loopStart = currentChunk()->count;
@@ -928,6 +949,10 @@ static void statement()
 	else if (match(TOKEN_IF))
 	{
 		ifStatement();
+	}
+	else if (match(TOKEN_RETURN))
+	{
+		returnStatement();
 	}
 	else if (match(TOKEN_WHILE))
 	{
