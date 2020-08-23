@@ -4,6 +4,7 @@
 
 #include "common.h"
 #include "compiler.h"
+#include "memory.h"
 #include "scanner.h"
 
 #ifdef DEBUG_PRINT_MODE
@@ -74,7 +75,14 @@ typedef struct
 {
 	Token name;
 	int depth;
+	bool isCaptured;
 } Local;
+
+typedef struct
+{
+	uint16_t index;
+	bool isLocal;
+} Upvalue;
 
 typedef enum
 {
@@ -90,6 +98,7 @@ typedef struct Compiler
 	
 	Local locals[UINT16_COUNT];
 	int localCount;
+	Upvalue upvalues[UINT16_COUNT];
 	int scopeDepth;
 } Compiler;
 
@@ -251,6 +260,7 @@ static void initCompiler(Compiler* compiler, FunctionType type)
 
 	Local* local = &current->locals[current->localCount++];
 	local->depth = 0;
+	local->isCaptured = false;
 	local->name.start = "";
 	local->name.length = 0;
 }
@@ -283,7 +293,14 @@ static void endScope()
 
 	while (current->localCount > 0 && current->locals[current->localCount - 1].depth > current->scopeDepth)
 	{
-		emitByte(OP_POP);
+		if (current->locals[current->localCount - 1].isCaptured)
+		{
+			emitByte(OP_CLOSE_UPVALUE);
+		}
+		else
+		{
+			emitByte(OP_POP);
+		}
 		current->localCount--;
 	}
 }
@@ -322,6 +339,49 @@ static int resolveLocal(Compiler* compiler, Token* name)
 	return -1;
 }
 
+static int addUpvalue(Compiler* compiler, uint16_t index, bool isLocal)
+{
+	int upvalueCount = compiler->function->upvalueCount;
+
+	for (int i = 0; i < upvalueCount; i++)
+	{
+		Upvalue* upvalue = &compiler->upvalues[i];
+		if (upvalue->index == index && upvalue->isLocal == isLocal)
+		{
+			return i;
+		}
+	}
+
+	if (upvalueCount == UINT16_COUNT) {
+		error("Too many closure variables in function.");
+		return 0;
+	}
+
+	compiler->upvalues[upvalueCount].isLocal = isLocal;
+	compiler->upvalues[upvalueCount].index = index;
+	return compiler->function->upvalueCount++;
+	
+}
+
+static int resolveUpvalue(Compiler* compiler, Token* name)
+{
+	if (compiler->enclosing == NULL) return -1;
+
+	int local = resolveLocal(compiler->enclosing, name);
+	if (local != -1)
+	{
+		compiler->enclosing->locals[local].isCaptured = true;
+		return addUpvalue(compiler, (uint16_t)local, true);
+	}
+
+	int upvalue = resolveUpvalue(compiler->enclosing, name);
+	if (upvalue != -1)
+	{
+		return addUpvalue(compiler, (uint16_t)upvalue, false);
+	}
+	return -1;
+}
+
 static void addLocal(Token name)
 {
 	if (current->localCount == UINT16_COUNT)
@@ -332,14 +392,14 @@ static void addLocal(Token name)
 	Local* local = &current->locals[current->localCount++];
 	local->name = name;
 	local->depth = -1;
+	local->isCaptured = false;
 
 }
 
 static void declareVariable()
 {
 	// Global variables are implicitly delcared
-	if (current->scopeDepth == 0)
-		return;
+	if (current->scopeDepth == 0) return;
 
 	Token* name = &parser.previous;
 	for (int i = current->localCount - 1; i >= 0; i--)
@@ -456,6 +516,22 @@ static void call(bool canAssign)
 	emitBytes(OP_CALL, argCount);
 }
 
+static void dot(bool canAssign)
+{
+	consume(TOKEN_IDENTIFIER, "Expect property name after '.'.");
+	uint16_t name = identifierConstant(&parser.previous);
+
+	if (canAssign && match(TOKEN_EQUAL))
+	{
+		expression();
+		emitBytes(OP_SET_PROPERTY, name);
+	}
+	else
+	{
+		emitBytes(OP_GET_PROPERTY, name);
+	}
+}
+
 static void literal(bool canAssign)
 {
 	switch (parser.previous.type) {
@@ -531,6 +607,11 @@ static void namedVariable(Token name, bool canAssign)
 		getOp = OP_GET_LOCAL;
 		setOp = OP_SET_LOCAL;
 	}
+	else if ((arg = resolveUpvalue(current, &name)) != -1)
+	{
+		getOp = OP_GET_UPVALUE;
+		setOp = OP_SET_UPVALUE;
+	}
 	else
 	{
 		arg = identifierConstant(&name);
@@ -585,7 +666,7 @@ ParseRule rules[] = {
   [TOKEN_LEFT_BRACE] = { NULL,     NULL,   PREC_NONE },
   [TOKEN_RIGHT_BRACE] = { NULL,     NULL,   PREC_NONE },
   [TOKEN_COMMA] = { NULL,     NULL,   PREC_NONE },
-  [TOKEN_DOT] = { NULL,     NULL,   PREC_NONE },
+  [TOKEN_DOT] = { NULL, dot, PREC_CALL },
   [TOKEN_MINUS] = { unary,    binary, PREC_TERM },
   [TOKEN_PLUS] = { NULL,     binary, PREC_TERM },
   [TOKEN_SEMICOLON] = { NULL,     NULL,   PREC_NONE },
@@ -732,7 +813,26 @@ static void function(FunctionType type)
 
 	//create function object
 	ObjFunction* function = endCompiler();
-	emitBytes(OP_CONSTANT, makeConstant(OBJ_VAL(function)));
+	emitBytes(OP_CLOSURE, makeConstant(OBJ_VAL(function)));
+
+	for (int i = 0; i < function->upvalueCount; i++)
+	{
+		emitByte(compiler.upvalues[i].isLocal ? 1 : 0);
+		emitByte(compiler.upvalues[i].index);
+	}
+}
+
+static void classDeclaration()
+{
+	consume(TOKEN_IDENTIFIER, "Expect class name.");
+	uint16_t nameConstant = identifierConstant(&parser.previous);
+	declareVariable();
+
+	emitBytes(OP_CLASS, nameConstant);
+	defineVariable(nameConstant);
+
+	consume(TOKEN_LEFT_BRACE, "Expect '{' before class body.");
+	consume(TOKEN_RIGHT_BRACE, "Expect '}' after class body.");
 }
 
 static void funDeclaration()
@@ -920,7 +1020,11 @@ static void synchronize()
 
 static void declaration() 
 {
-	if (match(TOKEN_FUN))
+	if (match(TOKEN_CLASS))
+	{
+		classDeclaration();
+	}
+	else if (match(TOKEN_FUN))
 	{
 		funDeclaration();
 	}
@@ -988,4 +1092,14 @@ ObjFunction* compile(const char* source)
 	ObjFunction* function = endCompiler();
 	return parser.hadError ? NULL : function;
 
+}
+
+void markCompilerRoots()
+{
+	Compiler* compiler = current;
+	while (compiler != NULL)
+	{
+		markObject((Obj*)compiler->function);
+		compiler = compiler->enclosing;
+	}
 }
